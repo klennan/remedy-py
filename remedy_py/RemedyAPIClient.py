@@ -1,22 +1,22 @@
 # -*- coding: utf-8 -*-
 # Copyright: (c) 2021, Brian Reid
 # MIT License
-# Permission is hereby granted, free of charge, to any person obtaining a 
+# Permission is hereby granted, free of charge, to any person obtaining a
 # copy Of this software and associated documentation files (the "Software"),
 # to deal in the Software without restriction, including without limitation
 # the rights to use, copy, modify, merge, publish, distribute, sublicense,
-# and/or sell copies of the Software, and to permit persons to whom the 
+# and/or sell copies of the Software, and to permit persons to whom the
 # Software is furnished to do so, subject to the following conditions:
 #
 # The above copyright notice and this permission notice shall be included in
 # all copies or substantial portions of the Software.
 #
 # THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
-# OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF 
-# MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. 
+# OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+# MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
 # IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
-# DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR 
-# OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE 
+# DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+# OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 # USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 # pragma pylint: disable=unused-argument, no-self-use, undefined-variable
@@ -39,12 +39,12 @@ from remedy_py.RemedyConstants import *
 from remedy_py.interface.remedy_api import RemedyAPI
 
 class RemedyClient(RemedyAPI):
-    """ 
-    Client for the Remedy ITSM API. Object will inherit values and methods (see __init__) 
+    """
+    Client for the Remedy ITSM API. Object will inherit values and methods (see __init__)
 
     """
 
-    def __init__(self, host, username, password, port=None, verify=True, proxies={}, 
+    def __init__(self, host, username, password, port=None, verify=True, proxies={},
             timeout=DEFAULT_TIMEOUT, prefix=REQUEST_PREFIX):
         """
         Initializes the Client class.
@@ -68,11 +68,11 @@ class RemedyClient(RemedyAPI):
         :type password: int
         :param prefix: path for the requests (after /api before the form_name). Defaults from constants.
         :type password: str
-        
+
         :return: the response content and http status code as a tuple
         :rtype: tuple(json, int)
         """
-        # Defin the object properties
+        # Define the object properties
         self.host = host
         self.username = username
         self.password = password
@@ -103,7 +103,7 @@ class RemedyClient(RemedyAPI):
         url = self.base_url + "/jwt/login"
         data = {"username": self.username, "password": self.password}
 
-        response = requests.request("POST", url, data=data, headers=self.authHeaders, 
+        response = requests.request("POST", url, data=data, headers=self.authHeaders,
                             verify=self.verify, proxies=self.proxies, timeout=self.timeout)
         response.raise_for_status()
         token = response.content
@@ -137,7 +137,7 @@ class RemedyClient(RemedyAPI):
         # override default and add new headers as needed
         if new_headers is not None:
             for key in new_headers.keys():
-                reqHeaders[key.lower()] = new_headers[key] 
+                reqHeaders[key.lower()] = new_headers[key]
 
         # check to see if content-type has been passed and add if not
         has_content_type = False
@@ -145,7 +145,7 @@ class RemedyClient(RemedyAPI):
             if 'content-type' == key.lower():
                 has_content_type = True
                 break
-        
+
         if not has_content_type:
             reqHeaders['content-type'] = 'application/json'
 
@@ -185,7 +185,7 @@ class RemedyClient(RemedyAPI):
     def create_form_entry(self, form_name, values, headers=None, return_values=[], timeout=None):
         """
         create_form_entry is a member function used to take a payload
-        and form name and use it to create a new entry on the Remedy system. 
+        and form name and use it to create a new entry on the Remedy system.
         The function returns: a tuple with the response content as json and the http status code.
 
         :param form_name: name of the form to add an entry for
@@ -205,7 +205,7 @@ class RemedyClient(RemedyAPI):
             field_list = ["Incident Number"]
         else:
             field_list = ', '.join(return_values)
-        
+
         url = self.base_url + self.prefix + "/{}?fields=values({})".format(form_name, field_list)
 
         if headers is None:
@@ -221,7 +221,7 @@ class RemedyClient(RemedyAPI):
         response = requests.request("POST", url, json=entry, headers=reqHeaders, verify=self.verify,
                             proxies=self.proxies, timeout=timeout)
         response.raise_for_status()
-        
+
         return response.json(), response.status_code
 
 
@@ -241,7 +241,7 @@ class RemedyClient(RemedyAPI):
         url = self.base_url + self.prefix + "/{}/{}".format(form_name, req_id)
         response = requests.request("GET", url, headers=self.reqHeaders, verify=self.verify,
                                     proxies=self.proxies, timeout=self.timeout)
-        response.raise_for_status()                                    
+        response.raise_for_status()
 
         return response.json(), response.status_code
 
@@ -261,7 +261,7 @@ class RemedyClient(RemedyAPI):
         :return: the response content and http status code as a tuple
         :rtype: tuple(json, int)
         """
-        
+
         entry = {
             "values": values
         }
@@ -270,7 +270,7 @@ class RemedyClient(RemedyAPI):
         response = requests.request("PUT", url, json=entry, headers=self.reqHeaders, verify=self.verify,
                                     proxies=self.proxies, timeout=self.timeout)
         response.raise_for_status()
-        
+
         # Remedy returns an empty 204 for form updates.
         # get the updated incident and return it with the update status code
         status_code = response.status_code
@@ -334,21 +334,21 @@ class RemedyClient(RemedyAPI):
 
         response = requests.request("GET", url, headers=self.reqHeaders, verify=self.verify,
                                     proxies=self.proxies, timeout=self.timeout)
-        response.raise_for_status()                                    
+        response.raise_for_status()
 
         return response.json(), response.status_code
 
 
-    def attach_file_to_incident(self, req_id, filepath, filename, form_name = 'HPD:Help Desk', content_type='text/plain', 
+    def attach_file_to_incident(self, req_id, filepath, filename, form_name = 'HPD:Help Desk', content_type='text/plain',
                     details=None, view_access='Public'):
         """
         attach_file_to_incident is a member function used to attach a file to an incident
         based on a form name and request ID the user knows (such as the incident ID)
         (using req_id to keep compatibility with prior methods)
-        
-        The function returns: a tuple with the updated incident as json (dict), and 
+
+        The function returns: a tuple with the updated incident as json (dict), and
                             the http status code (should 204, as the content is empty).
-        
+
         This method may be made general for any form, but since I could not test it, I use the HPD:Help Desk a default form
 
         :param req_id: the request ID of the desired entry. Will be assumed as the value the Customer will know.
@@ -391,13 +391,13 @@ class RemedyClient(RemedyAPI):
         try:
             size = getsize(filepath+sep+filename)
             with open(f'{filepath+sep+filename}', 'rb') as file:
-                # Do not read more than 10MB of the file 
+                # Do not read more than 10MB of the file
                 if size >= 10000000 :
                     # File is bigger than 10MB, so read the last 10MB
                     file.seek(-10000000, SEEK_END)  # Note minus sign
                 # Read the remaining of the file (or all of it)
                 content = file.read()
-        # bare except to avoid errors and put something on the content. Otherwise meaningless.        
+        # bare except to avoid errors and put something on the content. Otherwise meaningless.
         except:
             content = 'File {} could not be read'.format(filepath+sep+filename)
 
@@ -416,13 +416,14 @@ class RemedyClient(RemedyAPI):
                                      proxies=self.proxies, timeout=self.timeout)
 
         response.raise_for_status()
-        
+
         # Remedy returns an empty 204 for form updates.
         # get the updated incident and return it with the update status code
         status_code = response.status_code
         updated_incident, _ = self.get_form_entry(form_name, entry_id)
 
         return updated_incident, status_code
+
 
     def add_worklog_to_incident(self, req_id, details, activity_type=None, view_access=None, secure_log=None):
         """
@@ -439,7 +440,7 @@ class RemedyClient(RemedyAPI):
         :type values: dict
         :param payload: Any extra options you want to include on the incident, defaults to {}
         :type payload: dict, optional
-        
+
         :return: the response content and http status code as a tuple
         :rtype: tuple(json, int)
         """
@@ -450,8 +451,8 @@ class RemedyClient(RemedyAPI):
         entry_id = incident['entries'][0]["values"]["Entry ID"]
 
         # Create attachment URL and values
-       
-        values = { "values": 
+
+        values = { "values":
             {
                 "z1D_Details": "{}".format(details if details is not None else "No details entered"),
                 "z1D_View_Access": "{}".format(view_access or "Public"),
@@ -466,7 +467,7 @@ class RemedyClient(RemedyAPI):
                                      proxies=self.proxies, timeout=self.timeout)
 
         response.raise_for_status()
-        
+
         # Remedy returns an empty 204 for form updates.
         # get the updated incident and return it with the update status code
         status_code = response.status_code
