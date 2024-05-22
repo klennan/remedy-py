@@ -59,9 +59,7 @@ class RemedyClient(RemedyAPI):
         :param password: password for the  username of the user that will open the case (see get_token)
         :type password: str
         :param port: port for the Remedy ITSM url. If not passed, constants are used. number (str, int, etc.)
-        :type password: str
-        :param port: port for the Remedy ITSM url. If not passed, constants are used. number (str, int, etc.)
-        :type password: str
+        :type port: str
         :param verify: verify SSL if true (default)
         :type password: bool
         :param timeout: timeout allowed for the requests
