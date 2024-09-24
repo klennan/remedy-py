@@ -10,20 +10,33 @@ import requests
 from accounts.models import Group
 from costs.utils import default_compute_rate
 from infrastructure.models import Server, Disk, Environment
-from orders.models import BlueprintOrderItem,ServerModOrderItem
+from orders.models import BlueprintOrderItem,ServerModOrderItem, Order
+from portals.models import PortalConfig
 from remedy_py.RemedyAPIClient import RemedyClient
+from remedy_py.constants import DEFAULT_TIMEOUT, REQUEST_PREFIX
 from resources.models import ResourceType, Resource
 from servicecatalog.models import ServiceBlueprint
 from utilities.models import ConnectionInfo
+from utilities.logger import ThreadLogger
+# For the file attachment
+from os import sep, SEEK_END
+from os.path import getsize
+import json
 
-CLOUDBOLTORDERURL    = "https://ukh-cloudbolt01.kuha.kumed.com/orders"
-SUPPORT_COMPANY      = 'University of Kansas Hospital'
+logger = ThreadLogger('RemedyHelper')
+
+portal = PortalConfig.objects.last()
+CLOUDBOLTORDERURL    = f"https://{portal.domain}/orders"
+
+#TODO - Move these to the CloudBolt settings
+REMEDY_API           = ConnectionInfo.objects.get(name='Remedy RestAPI')
+REMEDY_COMPANY      = 'University of Kansas Hospital'
 REMEDY_SUPPORT_GROUP = "Servers and Storage"
 REMEDY_SUPPORT_ORG   = "HITS - IT Infrastructure"
 REMEDY_DOMAINNAME    = "ukha-smartit.onbmc.com"
 REMEDY_TEMPLATEID    = "IDGAA5V0F2IWUAPH3YCVPG73D772NR"
-REMEDY_API           = ConnectionInfo.objects.get(name='Remedy RestAPI')
 FUNDING_APPROVER_ID  = "byoung"
+
 
 class RemedyHelper(RemedyClient):
     """
@@ -36,11 +49,27 @@ class RemedyHelper(RemedyClient):
         :param username: The Remedy username
         :param password: The Remedy password
         """
-        super().__init__(host, username, password, port, verify, proxies)
-        self.support_company = SUPPORT_COMPANY
+        super().__init__(host, username, password, port, verify, proxies, timeout=DEFAULT_TIMEOUT, prefix=REQUEST_PREFIX)
+        self.support_company = REMEDY_COMPANY
+
+    class FakeServer:
+        def __init__(self):
+            self.hostname = 'None'
+            self.quantity = 0
+            self.os_build = "None"
+            self.cpu_cnt = 0
+            self.mem_size = 0
+            self.disk_size = 0
+            self.ukhs_cost_center = 'N/A'
+            self.ukhs_funding_source = 'N/A'
+            self.ukhs_serverorder_notes = 'N/A'
+            self.ukhs_patch_group = 'N/A'
+            self.ukhs_impact = 'N/A'
+            self.ukhs_urgency = 'N/A'
+            self.ukhs_dr_tier = 'N/A'
 
 
-    def submit_workorder(self,values):
+    def submit_workorder(self, values):
         """Submit a values formatted as a Workorder to Remedy.
 
         This function submits a values dictionary to the Remedy Workorder API, and returns the Workorer JSON.
@@ -51,7 +80,7 @@ class RemedyHelper(RemedyClient):
         :type: dict
         """
 
-        form = "WOI:WorkOrderInterface"
+        form = "WOI:WorkOrderInterface_Create"
         try:
             workorder = self.create_form_entry(form_name=form,values=values)
 
@@ -61,7 +90,7 @@ class RemedyHelper(RemedyClient):
         return workorder[0]['values']
 
 
-    def create_workorder(self,order):
+    def create_workorder(self, order, description=None):
         """Transform a CMP Order into content for Remedy Workorder, then submit it.
 
         This function contains logic to create a Workorder in Remedy based on the order type.
@@ -73,10 +102,10 @@ class RemedyHelper(RemedyClient):
         :type: dict
         """
 
-        if isinstance(order.order_item.cast(), BlueprintOrderItem):
-            values = self.create_build_workorder(order)
-        elif isinstance(order.order_item.cast(), ServerModOrderItem):
-            values = self.create_modification_workorder(order)
+        if isinstance(order.orderitem_set.first().cast(), BlueprintOrderItem):
+            values = self.create_build_workorder(order, description)
+        elif isinstance(order.orderitem_set.first().cast(), ServerModOrderItem):
+            values = self.create_modification_workorder(order, description)
         else:
             return "Error: Order item is not a valid type"
 
@@ -166,13 +195,11 @@ class RemedyHelper(RemedyClient):
         return result
 
 
-    def create_build_workorder(self, order):
+    def create_build_workorder(self, order, description=None):
         """Create a build workorder in Remedy
 
-        :param order_item: The order item to create the workorder for
-        :type order_item: OrderItem
-        :param owner: The owner of the workorder
-        :type owner: str
+        :param order: The order item to create the workorder for
+        :type orders.model.Order: OrderItem
         :return: The workorder values
         :type: dict
         """
@@ -181,15 +208,32 @@ class RemedyHelper(RemedyClient):
         if not isinstance(order_item.cast(), BlueprintOrderItem):
             return "Error: Order item is not a BlueprintOrderItem"
 
-        owner         = order.owner.user
-        server        = order_item.server
-        environment   = server.environment
-        owner         = order.owner.user
-        hwcost        = self.get_server_rate_hardware_breakdown(order)
-        capacity      = self.get_environment_capacity(environment)
+        owner = order.owner.user
+        try:
+            server      = order_item.server
+            hostname    = server.hostname
+            environment = server.environment
+            os_build    = server.os_build.name
+            capacity    = self.get_environment_capacity(environment)
+        except AttributeError:
+            server      = self.FakeServer()
+            hostname    = order.name
+            environment = ''
+            os_build    = ''
+            capacity    = ''
 
+        try:
+            quotedcost = order_item.get_rate_display()
+            hwcost     = self.get_server_rate_hardware_breakdown(order)
+        except AttributeError:
+            quotedcost = ''
+            hwcost     = ''
 
-        description = f"""
+        recipient = f"{order.recipient.full_name} ({order.recipient.user.email})" if order.recipient else ''
+
+        if not description:
+            # Build the description if it wasn't passed in
+            description = f'''
     Once this workorder is "In Progress" and the funding process has been marked "Success", CloudBolt will proceed with the server build.
     -OR-
     View, Edit, Approve or Deny the order here:
@@ -197,8 +241,8 @@ class RemedyHelper(RemedyClient):
 
     Server Name:\t {server.hostname}
     Quantity:\t {server.quantity}
-    Requester:\t {owner.username}
-    On Behalf of:\t
+    Requestor:\t {owner.username}
+    On Behalf of:\t {recipient}
     Group:\t {order.group.parent.name} \ {order.group.name}
     Quoted Total Cost:\t {quotedcost}
     Project #:\t {server.ukhs_cost_center}
@@ -206,11 +250,25 @@ class RemedyHelper(RemedyClient):
 
     --HARDWARE--
     Share of Blade Cost:\t ${638.46 * server.quantity}
-    OS:\t\t\t {server.os_build.name}
+    OS:\t\t\t {os_build}
     CPU Cores:\t {server.cpu_cnt} (${float(hwcost['CPUs'])})
     Memory GB:\t {str(server.mem_size)} (${float(hwcost['Mem Size'])})
     Disk 1 GB:\t {server.disk_size} (${float(hwcost['Disk Size'])} (all disks included))
-    """
+    '''
+
+        # disk size attributes exist even if the value is None
+        if server.disk_1_size:
+            description += f'  Disk 2 GB:\t {server.disk_1_size}\n'
+        if server.disk_2_size:
+            description += f'  Disk 3 GB:\t {server.disk_2_size}\n'
+        if server.disk_3_size:
+            description += f'  Disk 4 GB:\t {server.disk_3_size}\n'
+
+        description += f'  NIC 1 VLAN:\t {server.sc_nic_0.name}\n'
+        if hasattr(server.sc_nic_1,"name"):
+            description += f'  NIC 2 VLAN:\t {server.sc_nic_1.name}\n'
+        if hasattr(server.sc_nic_2,"name"):
+            description += f'  NIC 3 VLAN:\t {server.sc_nic_2.name}\n'
 
         description += f'''
     Environment:\t {environment.name} / {environment.vmware_cluster}
@@ -221,12 +279,12 @@ class RemedyHelper(RemedyClient):
     \tDisk GB:\t\t {capacity['disk_available']}
     \tVM Count:\t {capacity['vm_count']}
 
-        --ATTRIBUTES--
+    --ATTRIBUTES--
     Tech Doc URL:\t {server.ukhs_technicaldoc_url}
     Application:\t {server.ukhs_application_name}
     App Vendor:\t {server.ukhs_app_vendor}
     Environment:\t {server.ukhs_environment}
-    Contact(s):\t {server.ukhs_server_contact}
+    Contact(s):\t {'; '.join(server.ukhs_server_contact)}
     Description:\t {server.ukhs_server_description}
     Patch Group:\t {server.ukhs_patch_group}
     AD OU:\t {server.ukhs_organizational_unit}
@@ -234,25 +292,40 @@ class RemedyHelper(RemedyClient):
     '''
 
         values = {
-            'Summary': f"Build {order_item.server.hostname}",
-            'Description': description,
-            'Notes': f"Build {order_item.server.hostname}",
-            'Requester': owner.username,
-            'Status': 'Assigned',
-            'Priority': 'Medium',
-            'Service': 'Infrastructure',
-            'Category': 'Server',
-            'Subcategory': 'Build',
-            'Impact': '3-Moderate',
-            'Urgency': '3-Medium',
-            'Assigned Group': 'Servers and Storage',
-            'Assigned Support Company': self.support_company,
-            'Assigned Support Organization': 'HITS - IT Infrastructure',
+            'Summary': f"Build {hostname}",
+            'Detailed Description': description,
+            "Customer First Name":  owner.first_name,
+            "Customer Last Name":   owner.last_name,
+            "RequesterLoginID":     owner.username,
+            "First Name":           owner.first_name,
+            "Last Name":            owner.last_name,
+            "Support Group Name":   REMEDY_SUPPORT_GROUP,
+            "Support Organization": REMEDY_SUPPORT_ORG,
+            "Support Company":      REMEDY_COMPANY,
+            "Location Company":     REMEDY_COMPANY,
+            "Company":              REMEDY_COMPANY,
+            "Submitter":            REMEDY_API.username,
+            "Priority":             "Low",
+            "Status":               "Assigned",
+            "Automation Status":    "Automated",
+            "WO Type Field 01":     "Build",
+            "WO Type Field 02":     f"CMP OrderID {order.id}",
+            "WO Type Field 03":     server.ukhs_funding_source,
+            "WO Type Field 04":     server.ukhs_serverorder_notes,
+            "WO Type Field 05 Label": "CloudBolt Status",
+            "WO Type Field 05":     "Pending Approval",
+            "WO Type Field 14":     server.ukhs_patch_group,
+            "WO Type Field 16":     server.ukhs_impact,
+            "WO Type Field 17":     server.ukhs_urgency,
+            "WO Type Field 18":     server.ukhs_dr_tier,
+            "TemplateID":           REMEDY_TEMPLATEID,
+            "z1D_Action":           "CREATE"
         }
+
         return values
 
 
-    def create_modification_workorder(self, order):
+    def create_modification_workorder(self, order, description=None):
         """Create a modification workorder in Remedy
 
         :param order: The order item to create the workorder for
@@ -269,7 +342,9 @@ class RemedyHelper(RemedyClient):
         server = Server.objects.get(hostname=oic.server.hostname)
         environment = Environment.objects.get(id=oic.environment_id)
 
-        description = f"""
+        if not description:
+            # Build the description if it wasn't passed in
+            description = f"""
     Once this workorder is "In Progress" and the funding process has been marked "Success", CloudBolt will proceed with the server modification.
     -OR-
     View, Edit, Approve or Deny the order here:
@@ -284,8 +359,8 @@ class RemedyHelper(RemedyClient):
 
     --MODIFICATION--
 """
-        for mod_item, mod_change in oic.delta().items():
-            description += f"{mod_item}: {mod_change}\n"
+            for mod_item, mod_change in oic.delta().items():
+                description += f"{mod_item}: {mod_change}\n"
 
         values = {
             'Summary': f"{order.name}",
@@ -300,7 +375,7 @@ class RemedyHelper(RemedyClient):
             'Impact': '3-Moderate',
             'Urgency': '3-Medium',
             'Assigned Group': 'Servers and Storage',
-            'Assigned Support Company': SUPPORT_COMPANY,
+            'Assigned Support Company': REMEDY_COMPANY,
             'Assigned Support Organization': 'HITS - IT Infrastructure',
         }
 
@@ -313,8 +388,16 @@ class RemedyHelper(RemedyClient):
         except Exception as e:
             return f"Error importing workorder: {e}"
 
-        res_type = ResourceType.objects.get(name='remedyworkorder')
         blueprint = ServiceBlueprint.objects.get(name='Remedy Workorder')
+        owner = None
+        res_type = ResourceType.objects.get(name='remedyworkorder')
+
+        if cmp_order_id:
+            order = Order.objects.get(id=cmp_order_id)
+            blueprint = order.blueprint
+            group = order.group.name
+            owner = order.owner
+
         try:
             group_obj = Group.objects.get(name=group)
         except Group.DoesNotExist:
@@ -325,7 +408,7 @@ class RemedyHelper(RemedyClient):
             name=workorder['values']['Work Order ID'],
             blueprint_id = blueprint.id,
             group = group_obj,
-            owner = None,
+            owner = owner,
             lifecycle = 'PENDING',
         )
 
@@ -334,6 +417,8 @@ class RemedyHelper(RemedyClient):
         if cmp_order_id:
             res.order = cmp_order_id
         res.save()
+        return True
+
 
     def get_form_fields(self,form_name,field_ids=''):
         # Invoke the RemedyAPI.get_form_fields function
@@ -403,3 +488,58 @@ class RemedyHelper(RemedyClient):
         )
 
         return rate_dict['Hardware']
+
+
+    def attach_file_to_workorder(self,workorder_id, filepath, filename, details=None, view_access='Public', content_type='application/octet-stream'):
+        # Invoke the RemedyAPI.create_form_entry function
+        form_name = "WOI:WorkOrderInterface"
+        workorder = self.get_workorder(workorder_id)
+        req_id = workorder['values']['Request ID']
+        values = {
+            "z1D_Details": "{}".format(details if details is not None else "No details entered"),
+            "z1D_View_Access": "{}".format(view_access if view_access is not None else "Public"),
+            "z1D_Action": "MODIFY",
+            "z1D_Activity Type*": "General Information",
+            "z1D_Secure_Log": "Yes",
+            "z2AF_Act_Attachment_1": "{}".format(filename)
+        }
+
+        # Create the files multipart submission
+
+        # Cannot send files larger than 10MB (10*1024*1024)
+        #   If larger, send the bottom 10MB (where incident issues will likely be)
+        try:
+            size = getsize(filepath+sep+filename)
+            with open(f'{filepath+sep+filename}', 'rb') as file:
+                # Do not read more than 10MB of the file
+                if size >= 10000000 :
+                    # File is bigger than 10MB, so read the last 10MB
+                    file.seek(-10000000, SEEK_END)  # Note minus sign
+                # Read the remaining of the file (or all of it)
+                content = file.read()
+        # bare except to avoid errors and put something on the content. Otherwise meaningless.
+        except:
+            content = 'File {} could not be read'.format(filepath+sep+filename)
+
+        # Add json to the multipart form request
+        files = {}
+        # None in the first part will not show a filename.
+        # need to use json.dumps with the encode. str(values) will not work.
+        files['entry'] = (None, json.dumps({'values': values}).encode('utf-8'), 'application/json')
+        files['attach-z2AF_Act_Attachment_1'] = (filename, content, content_type)
+
+        url = self.base_url + self.prefix + "/{}/{}".format(form_name, req_id)
+
+        # Send only the authorization header for content-type to be set as multipart by the requests module
+        reqHeaders = {'Authorization': self.reqHeaders['Authorization']}
+        response = requests.request("PUT", url, data=None, files=files, headers=reqHeaders, verify=self.verify,
+                                    proxies=self.proxies, timeout=self.timeout)
+
+        response.raise_for_status()
+
+        # Remedy returns an empty 204 for form updates.
+        # get the updated incident and return it with the update status code
+        status_code = response.status_code
+        updated_incident, _ = self.get_form_entry(form_name, req_id)
+
+        return updated_incident, status_code
