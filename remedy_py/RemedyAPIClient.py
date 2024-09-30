@@ -200,7 +200,14 @@ class RemedyClient(RemedyAPI):
         :rtype: tuple(json, int)
         """
         if len(return_values) == 0:
-            field_list = ["Incident Number"]
+            if "HPD:" in form_name:
+                field_list = ["Incident Number"]
+            elif "WOI:" in form_name:
+                field_list = ["Work Order ID"]
+            elif "CHG:" in form_name:
+                field_list = ["Change ID"]
+            elif "CTM:" in form_name:
+                field_list = ["Login ID"]
         else:
             field_list = ', '.join(return_values)
 
@@ -411,7 +418,7 @@ class RemedyClient(RemedyAPI):
         # Send only the authorization header for content-type to be set as multipart by the requests module
         reqHeaders = {'Authorization': self.reqHeaders['Authorization']}
         response = requests.request("PUT", url, data=None, files=files, headers=reqHeaders, verify=self.verify,
-                                     proxies=self.proxies, timeout=self.timeout)
+                                    proxies=self.proxies, timeout=self.timeout)
 
         response.raise_for_status()
 
@@ -421,7 +428,6 @@ class RemedyClient(RemedyAPI):
         updated_incident, _ = self.get_form_entry(form_name, entry_id)
 
         return updated_incident, status_code
-
 
     def add_worklog_to_incident(self, req_id, details, activity_type=None, view_access=None, secure_log=None):
         """
@@ -462,7 +468,7 @@ class RemedyClient(RemedyAPI):
         url = self.base_url + self.prefix + "/{}/{}".format(form_name, entry_id)
 
         response = requests.request("PUT", url, json=values, headers=self.reqHeaders, verify=self.verify,
-                                     proxies=self.proxies, timeout=self.timeout)
+                                    proxies=self.proxies, timeout=self.timeout)
 
         response.raise_for_status()
 
