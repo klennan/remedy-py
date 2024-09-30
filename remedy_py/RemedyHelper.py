@@ -7,17 +7,17 @@ Initialize the RemedyHelper class with the Remedy hostname, username, and passwo
 """
 
 import requests
-from accounts.models import Group
-from costs.utils import default_compute_rate
-from infrastructure.models import Server, Disk, Environment
-from orders.models import BlueprintOrderItem,ServerModOrderItem, Order
-from portals.models import PortalConfig
+from accounts.models import Group                                      # type: ignore
+from costs.utils import default_compute_rate                           # type: ignore
+from infrastructure.models import Server, Disk, Environment            # type: ignore
+from orders.models import BlueprintOrderItem,ServerModOrderItem, Order # type: ignore
+from portals.models import PortalConfig                                # type: ignore
 from remedy_py.RemedyAPIClient import RemedyClient
-from remedy_py.constants import DEFAULT_TIMEOUT, REQUEST_PREFIX
-from resources.models import ResourceType, Resource
-from servicecatalog.models import ServiceBlueprint
-from utilities.models import ConnectionInfo
-from utilities.logger import ThreadLogger
+from remedy_py.RemedyConstants import DEFAULT_TIMEOUT, REQUEST_PREFIX
+from resources.models import ResourceType, Resource                    # type: ignore
+from servicecatalog.models import ServiceBlueprint                     # type: ignore
+from utilities.models import ConnectionInfo                            # type: ignore
+from utilities.logger import ThreadLogger                              # type: ignore
 # For the file attachment
 from os import sep, SEEK_END
 from os.path import getsize
@@ -30,18 +30,21 @@ CLOUDBOLTORDERURL    = f"https://{portal.domain}/orders"
 
 #TODO - Move these to the CloudBolt settings
 REMEDY_API           = ConnectionInfo.objects.get(name='Remedy RestAPI')
-REMEDY_COMPANY      = 'University of Kansas Hospital'
+REMEDY_COMPANY       = 'University of Kansas Hospital'
 REMEDY_SUPPORT_GROUP = "Servers and Storage"
 REMEDY_SUPPORT_ORG   = "HITS - IT Infrastructure"
 REMEDY_DOMAINNAME    = "ukha-smartit.onbmc.com"
-REMEDY_TEMPLATEID    = "IDGAA5V0F2IWUAPH3YCVPG73D772NR"
 FUNDING_APPROVER_ID  = "byoung"
-
+TEMPLATE_LIST = {
+    "Build_Server": "IDGAA5V0F2IWUAPH3YCVPG73D772NR",
+    "Modify_Server": "IDGAA5V0F2BJ9APPV3A8POYHQ1BJB4",
+}
 
 class RemedyHelper(RemedyClient):
     """
     This class extends the RemedyClient class to provide additional functionality for working with Remedy forms.
     """
+
     def __init__(self, host, username, password, port=None, verify=True, proxies={}):
         """
         Initialize the RemedyHelper class
@@ -82,15 +85,15 @@ class RemedyHelper(RemedyClient):
 
         form = "WOI:WorkOrderInterface_Create"
         try:
-            workorder = self.create_form_entry(form_name=form,values=values)
-
+            workorder = self.create_form_entry(form_name=form, values=values, return_values=['WorkOrder_ID'])
+            logger.debug(f"Workorder created: {workorder[0]['values']['WorkOrder_ID']}")
         except Exception as e:
             return f"Error creating workorder: {e}"
 
         return workorder[0]['values']
 
 
-    def create_workorder(self, order, description=None):
+    def create_workorder(self, order, description=None, template_id=TEMPLATE_LIST["Build_Server"]):
         """Transform a CMP Order into content for Remedy Workorder, then submit it.
 
         This function contains logic to create a Workorder in Remedy based on the order type.
@@ -103,9 +106,9 @@ class RemedyHelper(RemedyClient):
         """
 
         if isinstance(order.orderitem_set.first().cast(), BlueprintOrderItem):
-            values = self.create_build_workorder(order, description)
+            values = self.create_build_workorder(order, description, template_id)
         elif isinstance(order.orderitem_set.first().cast(), ServerModOrderItem):
-            values = self.create_modification_workorder(order, description)
+            values = self.create_modification_workorder(order, description, template_id)
         else:
             return "Error: Order item is not a valid type"
 
@@ -195,7 +198,7 @@ class RemedyHelper(RemedyClient):
         return result
 
 
-    def create_build_workorder(self, order, description=None):
+    def create_build_workorder(self, order, description=None, template_id=TEMPLATE_LIST["Build_Server"]):
         """Create a build workorder in Remedy
 
         :param order: The order item to create the workorder for
@@ -256,43 +259,43 @@ class RemedyHelper(RemedyClient):
     Disk 1 GB:\t {server.disk_size} (${float(hwcost['Disk Size'])} (all disks included))
     '''
 
-        # disk size attributes exist even if the value is None
-        if server.disk_1_size:
-            description += f'  Disk 2 GB:\t {server.disk_1_size}\n'
-        if server.disk_2_size:
-            description += f'  Disk 3 GB:\t {server.disk_2_size}\n'
-        if server.disk_3_size:
-            description += f'  Disk 4 GB:\t {server.disk_3_size}\n'
+            # disk size attributes exist even if the value is None
+            if server.disk_1_size:
+                description += f'  Disk 2 GB:\t {server.disk_1_size}\n'
+            if server.disk_2_size:
+                description += f'  Disk 3 GB:\t {server.disk_2_size}\n'
+            if server.disk_3_size:
+                description += f'  Disk 4 GB:\t {server.disk_3_size}\n'
 
-        description += f'  NIC 1 VLAN:\t {server.sc_nic_0.name}\n'
-        if hasattr(server.sc_nic_1,"name"):
-            description += f'  NIC 2 VLAN:\t {server.sc_nic_1.name}\n'
-        if hasattr(server.sc_nic_2,"name"):
-            description += f'  NIC 3 VLAN:\t {server.sc_nic_2.name}\n'
+            description += f'  NIC 1 VLAN:\t {server.sc_nic_0.name}\n'
+            if hasattr(server.sc_nic_1,"name"):
+                description += f'  NIC 2 VLAN:\t {server.sc_nic_1.name}\n'
+            if hasattr(server.sc_nic_2,"name"):
+                description += f'  NIC 3 VLAN:\t {server.sc_nic_2.name}\n'
 
-        description += f'''
-    Environment:\t {environment.name} / {environment.vmware_cluster}
-    Datastore:\t {environment.vmware_datastore.name}
-    Environment Available Capacity:
-    \tCPU:\t\t {capacity['cpu_available']}
-    \tMemory GB:\t {capacity['mem_available']}
-    \tDisk GB:\t\t {capacity['disk_available']}
-    \tVM Count:\t {capacity['vm_count']}
+            description += f'''
+        Environment:\t {environment.name} / {environment.vmware_cluster}
+        Datastore:\t {environment.vmware_datastore.name}
+        Environment Available Capacity:
+        \tCPU:\t\t {capacity['cpu_available']}
+        \tMemory GB:\t {capacity['mem_available']}
+        \tDisk GB:\t\t {capacity['disk_available']}
+        \tVM Count:\t {capacity['vm_count']}
 
-    --ATTRIBUTES--
-    Tech Doc URL:\t {server.ukhs_technicaldoc_url}
-    Application:\t {server.ukhs_application_name}
-    App Vendor:\t {server.ukhs_app_vendor}
-    Environment:\t {server.ukhs_environment}
-    Contact(s):\t {'; '.join(server.ukhs_server_contact)}
-    Description:\t {server.ukhs_server_description}
-    Patch Group:\t {server.ukhs_patch_group}
-    AD OU:\t {server.ukhs_organizational_unit}
-    FDA 5010K:\t {server.ukhs_fda510k}
-    '''
+        --ATTRIBUTES--
+        Tech Doc URL:\t {server.ukhs_technicaldoc_url}
+        Application:\t {server.ukhs_application_name}
+        App Vendor:\t {server.ukhs_app_vendor}
+        Environment:\t {server.ukhs_environment}
+        Contact(s):\t {'; '.join(server.ukhs_server_contact)}
+        Description:\t {server.ukhs_server_description}
+        Patch Group:\t {server.ukhs_patch_group}
+        AD OU:\t {server.ukhs_organizational_unit}
+        FDA 5010K:\t {server.ukhs_fda510k}
+        '''
 
         values = {
-            'Summary': f"Build {hostname}",
+            'Summary': f"SRV - Build - CMP Order {order.id} - {hostname}",
             'Detailed Description': description,
             "Customer First Name":  owner.first_name,
             "Customer Last Name":   owner.last_name,
@@ -318,14 +321,14 @@ class RemedyHelper(RemedyClient):
             "WO Type Field 16":     server.ukhs_impact,
             "WO Type Field 17":     server.ukhs_urgency,
             "WO Type Field 18":     server.ukhs_dr_tier,
-            "TemplateID":           REMEDY_TEMPLATEID,
+            "TemplateID":           template_id,
             "z1D_Action":           "CREATE"
         }
 
         return values
 
 
-    def create_modification_workorder(self, order, description=None):
+    def create_modification_workorder(self, order, description=None, template_id=TEMPLATE_LIST["Modify_Server"]):
         """Create a modification workorder in Remedy
 
         :param order: The order item to create the workorder for
@@ -363,20 +366,30 @@ class RemedyHelper(RemedyClient):
                 description += f"{mod_item}: {mod_change}\n"
 
         values = {
-            'Summary': f"{order.name}",
-            'Description': description,
-            'Notes': f"{order.name}",
-            'Requester': owner.username,
-            'Status': 'Assigned',
-            'Priority': 'Medium',
-            'Service': 'Infrastructure',
-            'Category': 'Server',
-            'Subcategory': 'Modify',
-            'Impact': '3-Moderate',
-            'Urgency': '3-Medium',
-            'Assigned Group': 'Servers and Storage',
-            'Assigned Support Company': REMEDY_COMPANY,
-            'Assigned Support Organization': 'HITS - IT Infrastructure',
+            'Summary': f"SRV - Modify - CMP Order {order.id} - {server.hostname}",
+            'Detailed Description': description,
+            "Customer First Name":  owner.first_name,
+            "Customer Last Name":   owner.last_name,
+            "RequesterLoginID":     owner.username,
+            "First Name":           owner.first_name,
+            "Last Name":            owner.last_name,
+            "Support Group Name":   REMEDY_SUPPORT_GROUP,
+            "Support Organization": REMEDY_SUPPORT_ORG,
+            "Support Company":      REMEDY_COMPANY,
+            "Location Company":     REMEDY_COMPANY,
+            "Company":              REMEDY_COMPANY,
+            "Submitter":            REMEDY_API.username,
+            "Priority":             "Low",
+            "Status":               "Assigned",
+            "Automation Status":    "Automated",
+            "WO Type Field 01":     "Modify",
+            "WO Type Field 02":     f"CMP OrderID {order.id}",
+            "WO Type Field 03":     server.ukhs_funding_source,
+            "WO Type Field 04":     server.ukhs_serverorder_notes,
+            "WO Type Field 05 Label": "CloudBolt Status",
+            "WO Type Field 05":     "Pending Approval",
+            "TemplateID":           template_id,
+            "z1D_Action":           "CREATE"
         }
 
         return values
