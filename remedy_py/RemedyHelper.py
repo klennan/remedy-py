@@ -211,6 +211,12 @@ class RemedyHelper(RemedyClient):
         if not isinstance(order_item.cast(), BlueprintOrderItem):
             return "Error: Order item is not a BlueprintOrderItem"
 
+        # Template ID
+        if TEMPLATE_LIST.get(template_id):
+            template_id = TEMPLATE_LIST[template_id]
+        elif not template_id.startswith("IDGAA"):
+            return "Error: Invalid template ID"
+
         owner = order.owner.user
         try:
             server      = order_item.server
@@ -344,6 +350,12 @@ class RemedyHelper(RemedyClient):
         oic    = order_item.cast()
         server = Server.objects.get(hostname=oic.server.hostname)
         environment = Environment.objects.get(id=oic.environment_id)
+
+        # Template ID
+        if TEMPLATE_LIST.get(template_id):
+            template_id = TEMPLATE_LIST[template_id]
+        elif not template_id.startswith("IDGAA"):
+            return "Error: Invalid template ID"
 
         if not description:
             # Build the description if it wasn't passed in
