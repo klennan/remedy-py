@@ -301,7 +301,7 @@ class RemedyHelper(RemedyClient):
         '''
 
         values = {
-            'Summary': f"SRV - Build - CMP Order {order.id} - {hostname}",
+            'Summary': f"SRV - Build - {hostname} (CMP OrderID {order.id})",
             'Detailed Description': description,
             "Customer First Name":  owner.first_name,
             "Customer Last Name":   owner.last_name,
@@ -348,8 +348,13 @@ class RemedyHelper(RemedyClient):
 
         owner  = order.owner.user
         oic    = order_item.cast()
-        server = Server.objects.get(hostname=oic.server.hostname)
-        environment = Environment.objects.get(id=oic.environment_id)
+
+        try:
+            server = Server.objects.get(id=oic.server.id)
+            hostname    = server.hostname
+        except AttributeError:
+            server      = self.FakeServer()
+            hostname    = order.name
 
         # Template ID
         if TEMPLATE_LIST.get(template_id):
@@ -365,10 +370,10 @@ class RemedyHelper(RemedyClient):
     View, Edit, Approve or Deny the order here:
     {CLOUDBOLTORDERURL}/{order.id}
 
-    Server Name:\t {server.hostname}
+    Server Name:\t {hostname}
     Quantity:\t {order.mod_server_count()}
     Requester:\t {owner.username}
-    Group:\t {order.group.parent.name} \ {order.group.name}
+    Group:\t {order.group.parent.name if order.group.parent else ''} \ {order.group.name}
     Total Quoted Cost:\t {order.get_rate_display()}
     Funding Source:\t {server.ukhs_funding_source}
 
@@ -378,7 +383,7 @@ class RemedyHelper(RemedyClient):
                 description += f"{mod_item}: {mod_change}\n"
 
         values = {
-            'Summary': f"SRV - Modify - CMP Order {order.id} - {server.hostname}",
+            'Summary': f"SRV - Modify - {server.hostname} (CMP Order {order.id})",
             'Detailed Description': description,
             "Customer First Name":  owner.first_name,
             "Customer Last Name":   owner.last_name,
@@ -419,9 +424,9 @@ class RemedyHelper(RemedyClient):
 
         if cmp_order_id:
             order = Order.objects.get(id=cmp_order_id)
-            blueprint = order.blueprint
             group = order.group.name
             owner = order.owner
+            blueprint = order.blueprint if order.blueprint else blueprint
 
         try:
             group_obj = Group.objects.get(name=group)
@@ -430,11 +435,11 @@ class RemedyHelper(RemedyClient):
 
         res = Resource.objects.create(
             resource_type = res_type,
-            name=workorder['values']['Work Order ID'],
-            blueprint_id = blueprint.id,
-            group = group_obj,
-            owner = owner,
-            lifecycle = 'PENDING',
+            name          = workorder['values']['Work Order ID'],
+            blueprint_id  = blueprint.id,
+            group         = group_obj,
+            owner         = owner,
+            lifecycle     = 'PENDING',
         )
 
         res.bmc_workorder_status = workorder['values']['Status']
@@ -516,6 +521,11 @@ class RemedyHelper(RemedyClient):
 
 
     def attach_file_to_workorder(self,workorder_id, filepath, filename, details=None, view_access='Public', content_type='application/octet-stream'):
+        """
+        Attach a file to a workorder in Remedy
+        Currently not working.
+        """
+
         # Invoke the RemedyAPI.create_form_entry function
         form_name = "WOI:WorkOrderInterface"
         workorder = self.get_workorder(workorder_id)
@@ -568,3 +578,41 @@ class RemedyHelper(RemedyClient):
         updated_incident, _ = self.get_form_entry(form_name, req_id)
 
         return updated_incident, status_code
+
+
+    def DescriptionBuilder(self, order=None, job=None):
+        if job:
+            if job.parent_job:
+                order = job.parent_job.get_order()
+            else:
+                order = job.get_order()
+
+        owner = order.owner.user
+
+        # Build the description if it wasn't passed in
+        description = f'''
+Once this workorder is "In Progress" and the funding process has been marked "Success", CloudBolt will proceed with the server build.
+-OR-
+View, Edit, Approve or Deny the order here:
+{CLOUDBOLTORDERURL}/{order.id}
+
+--ORDER--
+Requestor:\t {owner.username}
+On Behalf of:\t {recipient}
+Group:\t {order.group.parent.name} \ {order.group.name}
+Quoted Total Cost:\t {quotedcost}
+Project #:\t {server.ukhs_cost_center}
+Funding Source:\t {server.ukhs_funding_source}
+
+--HARDWARE--
+'''
+        if server:
+            description += f'''
+Server Name:\t {server.hostname}
+Quantity:\t {server.quantity}
+Share of Blade Cost:\t ${638.46 * server.quantity}
+OS:\t\t\t {server.os_build.name}
+CPU Cores:\t {server.cpu_cnt} (${float(hwcost['CPUs'])})
+Memory GB:\t {str(server.mem_size)} (${float(hwcost['Mem Size'])})
+'''
+        return description
